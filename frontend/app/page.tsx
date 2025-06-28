@@ -2,6 +2,8 @@
 
 import { useState, useRef, useEffect } from 'react'
 import { Send, Bot, User, Key, Settings, Sparkles } from 'lucide-react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 
 interface Message {
   role: 'user' | 'assistant'
@@ -17,6 +19,7 @@ export default function Home() {
   const [showApiKeyInput, setShowApiKeyInput] = useState(false)
   const [developerMessage, setDeveloperMessage] = useState('You are a helpful AI assistant. Provide clear, concise, and accurate responses.')
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -26,6 +29,24 @@ export default function Home() {
     scrollToBottom()
   }, [messages])
 
+  // Handle Ctrl+Enter for new lines, Enter for submission
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Enter' && !e.ctrlKey) {
+      e.preventDefault()
+      handleSubmit(e as any)
+    }
+  }
+
+  // Auto-resize textarea based on content
+  const handleTextareaChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setInputMessage(e.target.value)
+    
+    // Auto-resize textarea
+    const textarea = e.target
+    textarea.style.height = 'auto'
+    textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`
+  }
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!inputMessage.trim() || !apiKey.trim()) return
@@ -33,6 +54,11 @@ export default function Home() {
     const userMessage = inputMessage.trim()
     setInputMessage('')
     setIsLoading(true)
+
+    // Reset textarea height
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto'
+    }
 
     // Add user message to chat
     const newUserMessage: Message = {
@@ -103,6 +129,75 @@ export default function Home() {
 
   const formatTime = (date: Date) => {
     return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  }
+
+  // Custom markdown components for better styling
+  const markdownComponents = {
+    // Style code blocks
+    code: ({ node, inline, className, children, ...props }: any) => {
+      const match = /language-(\w+)/.exec(className || '')
+      return !inline ? (
+        <pre className="bg-gray-100 dark:bg-gray-800 rounded-lg p-4 overflow-x-auto my-2">
+          <code className={className} {...props}>
+            {children}
+          </code>
+        </pre>
+      ) : (
+        <code className="bg-gray-100 dark:bg-gray-700 px-1 py-0.5 rounded text-sm" {...props}>
+          {children}
+        </code>
+      )
+    },
+    // Style links
+    a: ({ href, children }: any) => (
+      <a href={href} className="text-blue-600 dark:text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">
+        {children}
+      </a>
+    ),
+    // Style blockquotes
+    blockquote: ({ children }: any) => (
+      <blockquote className="border-l-4 border-gray-300 dark:border-gray-600 pl-4 italic my-2">
+        {children}
+      </blockquote>
+    ),
+    // Style lists
+    ul: ({ children }: any) => (
+      <ul className="list-disc list-inside my-2 space-y-1">
+        {children}
+      </ul>
+    ),
+    ol: ({ children }: any) => (
+      <ol className="list-decimal list-inside my-2 space-y-1">
+        {children}
+      </ol>
+    ),
+    // Style headings
+    h1: ({ children }: any) => <h1 className="text-2xl font-bold my-4">{children}</h1>,
+    h2: ({ children }: any) => <h2 className="text-xl font-bold my-3">{children}</h2>,
+    h3: ({ children }: any) => <h3 className="text-lg font-bold my-2">{children}</h3>,
+    h4: ({ children }: any) => <h4 className="text-base font-bold my-2">{children}</h4>,
+    h5: ({ children }: any) => <h5 className="text-sm font-bold my-2">{children}</h5>,
+    h6: ({ children }: any) => <h6 className="text-xs font-bold my-2">{children}</h6>,
+    // Style paragraphs
+    p: ({ children }: any) => <p className="my-2">{children}</p>,
+    // Style tables
+    table: ({ children }: any) => (
+      <div className="overflow-x-auto my-4">
+        <table className="min-w-full border border-gray-300 dark:border-gray-600">
+          {children}
+        </table>
+      </div>
+    ),
+    th: ({ children }: any) => (
+      <th className="border border-gray-300 dark:border-gray-600 px-4 py-2 bg-gray-100 dark:bg-gray-700 font-semibold">
+        {children}
+      </th>
+    ),
+    td: ({ children }: any) => (
+      <td className="border border-gray-300 dark:border-gray-600 px-4 py-2">
+        {children}
+      </td>
+    ),
   }
 
   return (
@@ -211,7 +306,18 @@ export default function Home() {
                       : 'bg-white dark:bg-gray-800 text-gray-900 dark:text-white border border-gray-200 dark:border-gray-700'
                   }`}
                 >
-                  <div className="whitespace-pre-wrap">{message.content}</div>
+                  {message.role === 'user' ? (
+                    <div className="whitespace-pre-wrap">{message.content}</div>
+                  ) : (
+                    <div className="prose prose-sm dark:prose-invert max-w-none">
+                      <ReactMarkdown 
+                        remarkPlugins={[remarkGfm]}
+                        components={markdownComponents}
+                      >
+                        {message.content}
+                      </ReactMarkdown>
+                    </div>
+                  )}
                   <div
                     className={`text-xs mt-2 ${
                       message.role === 'user'
@@ -251,14 +357,22 @@ export default function Home() {
       <div className="bg-white/80 dark:bg-gray-900/80 backdrop-blur-sm border-t border-gray-200 dark:border-gray-700 p-4">
         <div className="max-w-4xl mx-auto">
           <form onSubmit={handleSubmit} className="flex space-x-4">
-            <input
-              type="text"
-              value={inputMessage}
-              onChange={(e) => setInputMessage(e.target.value)}
-              placeholder="Type your message..."
-              disabled={isLoading || !apiKey.trim()}
-              className="flex-1 px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
-            />
+            <div className="flex-1 relative">
+              <textarea
+                ref={textareaRef}
+                value={inputMessage}
+                onChange={handleTextareaChange}
+                onKeyDown={handleKeyDown}
+                placeholder="Type your message... (Ctrl+Enter for new line, Enter to send)"
+                disabled={isLoading || !apiKey.trim()}
+                rows={1}
+                className="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed resize-none overflow-hidden"
+                style={{ minHeight: '48px', maxHeight: '200px' }}
+              />
+              <div className="absolute bottom-2 right-2 text-xs text-gray-400">
+                Ctrl+Enter
+              </div>
+            </div>
             <button
               type="submit"
               disabled={isLoading || !inputMessage.trim() || !apiKey.trim()}
