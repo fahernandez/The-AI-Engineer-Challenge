@@ -13,6 +13,7 @@ __pycache__/
 
 # Distribution / packaging
 .Python
+frontend/.next/*
 build/
 develop-eggs/
 dist/
