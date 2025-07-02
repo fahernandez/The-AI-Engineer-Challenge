@@ -1,6 +1,6 @@
 import os
 from typing import List
-import PyPDF2
+from pypdf import PdfReader
 
 
 class TextFileLoader:
@@ -92,7 +92,7 @@ class PDFLoader:
     def load_file(self):
         with open(self.path, 'rb') as file:
             # Create PDF reader object
-            pdf_reader = PyPDF2.PdfReader(file)
+            pdf_reader = PdfReader(file)
             
             # Extract text from each page
             text = ""
@@ -107,7 +107,7 @@ class PDFLoader:
                 if file.lower().endswith('.pdf'):
                     file_path = os.path.join(root, file)
                     with open(file_path, 'rb') as f:
-                        pdf_reader = PyPDF2.PdfReader(f)
+                        pdf_reader = PdfReader(f)
                         
                         # Extract text from each page
                         text = ""
