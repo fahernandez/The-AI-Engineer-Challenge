@@ -17,6 +17,7 @@ interface DocumentInfo {
   size: number
   status: 'uploaded' | 'indexed'
   chunks?: number
+  file_type?: string
 }
 
 // Settings interface for chunk and retrieval configuration
@@ -126,13 +127,17 @@ export default function Home() {
     textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`
   }
 
-  // Handle PDF file upload
+  // Handle document file upload (PDF or CSV)
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
 
-    if (!file.name.endsWith('.pdf')) {
-      alert('Please select a PDF file')
+    // Check if file type is supported
+    const supportedTypes = ['.pdf', '.csv']
+    const fileExtension = supportedTypes.find(ext => file.name.toLowerCase().endsWith(ext))
+    
+    if (!fileExtension) {
+      alert('Please select a PDF or CSV file')
       return
     }
 
@@ -142,24 +147,24 @@ export default function Home() {
       const formData = new FormData()
       formData.append('file', file)
 
-      const response = await fetch('/api/upload-pdf', {
+      const response = await fetch('/api/upload-document', {
         method: 'POST',
         body: formData,
       })
 
       if (!response.ok) {
-        throw new Error('Failed to upload PDF')
+        throw new Error('Failed to upload document')
       }
 
       const result = await response.json()
       await fetchDocumentStatus() // Refresh document status
       
       // Auto-index the uploaded document
-      handleIndexPDF()
+      handleIndexDocument()
       
     } catch (error) {
-      console.error('Error uploading PDF:', error)
-      alert('Error uploading PDF. Please try again.')
+      console.error('Error uploading document:', error)
+      alert('Error uploading document. Please try again.')
     } finally {
       setIsUploading(false)
       if (fileInputRef.current) {
@@ -168,8 +173,8 @@ export default function Home() {
     }
   }
 
-  // Handle PDF indexing
-  const handleIndexPDF = async () => {
+  // Handle document indexing (PDF or CSV)
+  const handleIndexDocument = async () => {
     if (!apiKey.trim()) {
       alert('Please enter your OpenAI API key first')
       return
@@ -178,7 +183,7 @@ export default function Home() {
     setIsIndexing(true)
     
     try {
-      const response = await fetch('/api/index-pdf', {
+      const response = await fetch('/api/index-document', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -193,15 +198,15 @@ export default function Home() {
       })
 
       if (!response.ok) {
-        throw new Error('Failed to index PDF')
+        throw new Error('Failed to index document')
       }
 
       const result = await response.json()
       await fetchDocumentStatus() // Refresh document status
       
     } catch (error) {
-      console.error('Error indexing PDF:', error)
-      alert('Error indexing PDF. Please check your API key and try again.')
+      console.error('Error indexing document:', error)
+      alert('Error indexing document. Please check your API key and try again.')
     } finally {
       setIsIndexing(false)
     }
@@ -393,10 +398,10 @@ export default function Home() {
             </div>
             <div>
               <h1 className="text-xl font-bold text-gray-900 dark:text-white">
-                PDF RAG Chat
+                Document RAG Chat
               </h1>
               <p className="text-sm text-gray-600 dark:text-gray-400">
-                Upload a PDF and chat with it using AI
+                Upload a PDF or CSV and chat with it using AI
               </p>
             </div>
           </div>
@@ -540,13 +545,13 @@ export default function Home() {
                 <input
                   ref={fileInputRef}
                   type="file"
-                  accept=".pdf"
+                  accept=".pdf,.csv"
                   onChange={handleFileUpload}
                   className="hidden"
                 />
                 <Upload className="h-8 w-8 text-gray-400 mx-auto mb-2" />
                 <p className="text-sm text-gray-600 dark:text-gray-400 mb-3">
-                  Upload a PDF to start chatting with it
+                  Upload a PDF or CSV to start chatting with it
                 </p>
                 <button
                   onClick={() => fileInputRef.current?.click()}
@@ -561,7 +566,7 @@ export default function Home() {
                   ) : (
                     <>
                       <Upload className="h-4 w-4" />
-                      <span>Choose PDF</span>
+                      <span>Choose File</span>
                     </>
                   )}
                 </button>
@@ -579,7 +584,7 @@ export default function Home() {
                             {doc.filename}
                           </p>
                           <p className="text-xs text-gray-500 dark:text-gray-400">
-                            {formatFileSize(doc.size)}
+                            {formatFileSize(doc.size)} • {doc.file_type?.toUpperCase() || 'PDF'}
                           </p>
                           {doc.chunks && (
                             <p className="text-xs text-gray-500 dark:text-gray-400">
@@ -614,7 +619,7 @@ export default function Home() {
                   
                   {documents.some(doc => doc.status === 'uploaded') && (
                     <button
-                      onClick={handleIndexPDF}
+                      onClick={handleIndexDocument}
                       disabled={isIndexing || !apiKey.trim()}
                       className="w-full px-4 py-2 bg-green-500 text-white rounded-md hover:bg-green-600 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-2"
                     >
@@ -670,12 +675,12 @@ export default function Home() {
                     <Sparkles className="h-8 w-8 text-white" />
                   </div>
                   <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
-                    Welcome to PDF RAG Chat
+                    Welcome to Document RAG Chat
                   </h3>
                   <p className="text-gray-600 dark:text-gray-400 max-w-md mx-auto">
                     {vectorDBReady 
                       ? "Your document is ready! Start asking questions about it."
-                      : "Upload a PDF document to start chatting with it, or chat normally with the AI assistant."
+                      : "Upload a PDF or CSV document to start chatting with it, or chat normally with the AI assistant."
                     }
                   </p>
                 </div>

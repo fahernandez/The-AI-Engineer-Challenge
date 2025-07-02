@@ -17,10 +17,10 @@ sys.path.append('..')  # Add parent directory to path to import aimakerspace
 from aimakerspace.vectordatabase import VectorDatabase
 from aimakerspace.openai_utils.embedding import EmbeddingModel
 from aimakerspace.openai_utils.chatmodel import ChatOpenAI
-from aimakerspace.text_utils import PDFLoader, CharacterTextSplitter
+from aimakerspace.text_utils import PDFLoader, CSVLoader, CharacterTextSplitter
 
 # Initialize FastAPI application with a title
-app = FastAPI(title="PDF RAG Chat API")
+app = FastAPI(title="Document RAG Chat API")
 
 # Configure CORS (Cross-Origin Resource Sharing) middleware
 # This allows the API to be accessed from different domains/origins
@@ -103,18 +103,26 @@ async def chat(request: ChatRequest):
 async def health_check():
     return {"status": "ok"}
 
-# PDF Upload endpoint
-@app.post("/api/upload-pdf")
-async def upload_pdf(file: UploadFile = File(...)):
+# Document Upload endpoint (supports PDF and CSV)
+@app.post("/api/upload-document")
+async def upload_document(file: UploadFile = File(...)):
     """
-    Upload a PDF file for processing
+    Upload a document file (PDF or CSV) for processing
     """
-    if not file.filename.endswith('.pdf'):
-        raise HTTPException(status_code=400, detail="Only PDF files are allowed")
+    # Check if file type is supported
+    allowed_extensions = ['.pdf', '.csv']
+    file_extension = None
+    for ext in allowed_extensions:
+        if file.filename.lower().endswith(ext):
+            file_extension = ext
+            break
+    
+    if not file_extension:
+        raise HTTPException(status_code=400, detail="Only PDF and CSV files are allowed")
     
     try:
-        # Save uploaded file temporarily
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as temp_file:
+        # Save uploaded file temporarily with correct extension
+        with tempfile.NamedTemporaryFile(delete=False, suffix=file_extension) as temp_file:
             content = await file.read()
             temp_file.write(content)
             temp_path = temp_file.name
@@ -125,28 +133,38 @@ async def upload_pdf(file: UploadFile = File(...)):
             "filename": file.filename,
             "path": temp_path,
             "size": len(content),
-            "status": "uploaded"
+            "status": "uploaded",
+            "file_type": file_extension.lstrip('.')
         }]
         
         return {
-            "message": "PDF uploaded successfully",
+            "message": f"{file_extension.upper()} uploaded successfully",
             "filename": file.filename,
-            "size": len(content)
+            "size": len(content),
+            "file_type": file_extension.lstrip('.')
         }
     
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error uploading file: {str(e)}")
 
-# PDF Indexing endpoint
-@app.post("/api/index-pdf")
-async def index_pdf(request: IndexRequest):
+# Legacy PDF Upload endpoint (for backward compatibility)
+@app.post("/api/upload-pdf")
+async def upload_pdf(file: UploadFile = File(...)):
     """
-    Index the uploaded PDF using embeddings
+    Upload a PDF file for processing (legacy endpoint)
+    """
+    return await upload_document(file)
+
+# Document Indexing endpoint (supports PDF and CSV)
+@app.post("/api/index-document")
+async def index_document(request: IndexRequest):
+    """
+    Index the uploaded document (PDF or CSV) using embeddings
     """
     global vector_db, indexed_documents, current_api_key
     
     if not indexed_documents:
-        raise HTTPException(status_code=400, detail="No PDF uploaded")
+        raise HTTPException(status_code=400, detail="No document uploaded")
     
     try:
         current_api_key = request.api_key
@@ -154,13 +172,21 @@ async def index_pdf(request: IndexRequest):
         # Set OpenAI API key in environment
         os.environ["OPENAI_API_KEY"] = request.api_key
         
-        # Load and process PDF
-        pdf_path = indexed_documents[0]["path"]
-        pdf_loader = PDFLoader(pdf_path)
-        documents = pdf_loader.load_documents()
+        # Load and process document based on file type
+        doc_path = indexed_documents[0]["path"]
+        file_type = indexed_documents[0].get("file_type", "pdf")
+        
+        if file_type == "pdf":
+            loader = PDFLoader(doc_path)
+        elif file_type == "csv":
+            loader = CSVLoader(doc_path)
+        else:
+            raise HTTPException(status_code=400, detail=f"Unsupported file type: {file_type}")
+        
+        documents = loader.load_documents()
         
         if not documents:
-            raise HTTPException(status_code=400, detail="Could not extract text from PDF")
+            raise HTTPException(status_code=400, detail=f"Could not extract text from {file_type.upper()} file")
         
         # Split documents into chunks
         text_splitter = CharacterTextSplitter(chunk_size=request.chunk_settings.chunk_size, chunk_overlap=request.chunk_settings.chunk_overlap)
@@ -178,24 +204,33 @@ async def index_pdf(request: IndexRequest):
         indexed_documents[0]["chunks"] = len(chunks)
         
         return {
-            "message": "PDF indexed successfully",
+            "message": f"{file_type.upper()} indexed successfully",
             "chunks_created": len(chunks),
-            "filename": indexed_documents[0]["filename"]
+            "filename": indexed_documents[0]["filename"],
+            "file_type": file_type
         }
     
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error indexing PDF: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error indexing document: {str(e)}")
+
+# Legacy PDF Indexing endpoint (for backward compatibility)
+@app.post("/api/index-pdf")
+async def index_pdf(request: IndexRequest):
+    """
+    Index the uploaded PDF using embeddings (legacy endpoint)
+    """
+    return await index_document(request)
 
 # RAG Chat endpoint
 @app.post("/api/rag-chat")
 async def rag_chat(request: RAGChatRequest):
     """
-    Chat with the indexed PDF using RAG
+    Chat with the indexed document (PDF or CSV) using RAG
     """
     global vector_db, current_api_key
     
     if not vector_db:
-        raise HTTPException(status_code=400, detail="No PDF indexed. Please upload and index a PDF first.")
+        raise HTTPException(status_code=400, detail="No document indexed. Please upload and index a document first.")
     
     try:
         # Set OpenAI API key in environment
@@ -253,7 +288,7 @@ Answer:"""
 @app.get("/api/document-status")
 async def get_document_status():
     """
-    Get the status of uploaded and indexed documents
+    Get the status of uploaded and indexed documents (PDF and CSV)
     """
     global indexed_documents, vector_db
     
