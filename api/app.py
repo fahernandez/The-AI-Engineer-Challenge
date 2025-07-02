@@ -37,6 +37,15 @@ vector_db = None
 indexed_documents = []
 current_api_key = None
 
+# Define the data model for chunking settings
+class ChunkSettings(BaseModel):
+    chunk_size: int = 1000         # Size of each text chunk
+    chunk_overlap: int = 200       # Overlap between chunks
+
+# Define the data model for retrieval settings
+class RetrievalSettings(BaseModel):
+    k: int = 3                     # Number of chunks to retrieve
+
 # Define the data model for chat requests using Pydantic
 # This ensures incoming request data is properly validated
 class ChatRequest(BaseModel):
@@ -51,10 +60,12 @@ class RAGChatRequest(BaseModel):
     model: Optional[str] = "gpt-4o-mini"  # Optional model selection with default
     api_key: str          # OpenAI API key for authentication
     use_rag: bool = True   # Whether to use RAG functionality
+    retrieval_settings: Optional[RetrievalSettings] = RetrievalSettings()  # Settings for retrieval
 
 # Define the data model for PDF indexing requests
 class IndexRequest(BaseModel):
     api_key: str          # OpenAI API key for authentication
+    chunk_settings: Optional[ChunkSettings] = ChunkSettings()  # Settings for chunking
 
 # Define the main chat endpoint that handles POST requests
 @app.post("/api/chat")
@@ -152,7 +163,7 @@ async def index_pdf(request: IndexRequest):
             raise HTTPException(status_code=400, detail="Could not extract text from PDF")
         
         # Split documents into chunks
-        text_splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+        text_splitter = CharacterTextSplitter(chunk_size=request.chunk_settings.chunk_size, chunk_overlap=request.chunk_settings.chunk_overlap)
         chunks = text_splitter.split_texts(documents)
         
         # Create embeddings and build vector database
@@ -196,7 +207,7 @@ async def rag_chat(request: RAGChatRequest):
                 # Retrieve relevant chunks using RAG
                 relevant_chunks = vector_db.search_by_text(
                     request.user_message, 
-                    k=3, 
+                    k=request.retrieval_settings.k, 
                     return_as_text=True
                 )
                 

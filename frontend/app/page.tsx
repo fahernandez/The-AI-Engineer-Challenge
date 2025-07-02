@@ -19,6 +19,13 @@ interface DocumentInfo {
   chunks?: number
 }
 
+// Settings interface for chunk and retrieval configuration
+interface Settings {
+  chunkSize: number
+  chunkOverlap: number
+  retrievalCount: number
+}
+
 export default function Home() {
   const [messages, setMessages] = useState<Message[]>([])
   const [inputMessage, setInputMessage] = useState('')
@@ -33,6 +40,14 @@ export default function Home() {
   const [isIndexing, setIsIndexing] = useState(false)
   const [useRAG, setUseRAG] = useState(true)
   const [vectorDBReady, setVectorDBReady] = useState(false)
+  
+  // Settings state
+  const [settings, setSettings] = useState<Settings>({
+    chunkSize: 1000,
+    chunkOverlap: 200,
+    retrievalCount: 3
+  })
+  const [showSettings, setShowSettings] = useState(false)
   
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -49,6 +64,8 @@ export default function Home() {
   useEffect(() => {
     // Check document status on component mount
     fetchDocumentStatus()
+    // Load settings from localStorage
+    loadSettings()
   }, [])
 
   const fetchDocumentStatus = async () => {
@@ -60,6 +77,35 @@ export default function Home() {
     } catch (error) {
       console.error('Error fetching document status:', error)
     }
+  }
+
+  // Load settings from localStorage
+  const loadSettings = () => {
+    try {
+      const savedSettings = localStorage.getItem('ragChatSettings')
+      if (savedSettings) {
+        const parsedSettings = JSON.parse(savedSettings)
+        setSettings(parsedSettings)
+      }
+    } catch (error) {
+      console.error('Error loading settings:', error)
+    }
+  }
+
+  // Save settings to localStorage
+  const saveSettings = (newSettings: Settings) => {
+    try {
+      localStorage.setItem('ragChatSettings', JSON.stringify(newSettings))
+      setSettings(newSettings)
+    } catch (error) {
+      console.error('Error saving settings:', error)
+    }
+  }
+
+  // Handle settings change
+  const handleSettingsChange = (field: keyof Settings, value: number) => {
+    const newSettings = { ...settings, [field]: value }
+    saveSettings(newSettings)
   }
 
   // Handle Ctrl+Enter for new lines, Enter for submission
@@ -138,7 +184,11 @@ export default function Home() {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          api_key: apiKey
+          api_key: apiKey,
+          chunk_settings: {
+            chunk_size: settings.chunkSize,
+            chunk_overlap: settings.chunkOverlap
+          }
         }),
       })
 
@@ -186,7 +236,10 @@ export default function Home() {
             user_message: userMessage,
             model: 'gpt-4o-mini',
             api_key: apiKey,
-            use_rag: true
+            use_rag: true,
+            retrieval_settings: {
+              k: settings.retrievalCount
+            }
           }
         : {
             developer_message: developerMessage,
@@ -357,11 +410,18 @@ export default function Home() {
               <Key className="h-5 w-5" />
             </button>
             <button
+              onClick={() => setShowSettings(!showSettings)}
+              className="p-2 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white transition-colors"
+              title="RAG Settings"
+            >
+              <Settings className="h-5 w-5" />
+            </button>
+            <button
               onClick={() => setMessages([])}
               className="p-2 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white transition-colors"
               title="Clear Chat"
             >
-              <Settings className="h-5 w-5" />
+              <span className="text-sm">Clear</span>
             </button>
           </div>
         </div>
@@ -384,6 +444,83 @@ export default function Home() {
             <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
               Your API key is stored locally and never sent to our servers.
             </p>
+          </div>
+        </div>
+      )}
+
+      {/* Settings Panel */}
+      {showSettings && (
+        <div className="bg-white/80 dark:bg-gray-900/80 backdrop-blur-sm border-b border-gray-200 dark:border-gray-700 p-4">
+          <div className="max-w-6xl mx-auto">
+            <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-4">RAG Settings</h3>
+            
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              {/* Chunk Size */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                  Chunk Size
+                </label>
+                <input
+                  type="number"
+                  value={settings.chunkSize}
+                  onChange={(e) => handleSettingsChange('chunkSize', parseInt(e.target.value) || 1000)}
+                  min="100"
+                  max="4000"
+                  step="100"
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  Size of each text chunk (100-4000 characters)
+                </p>
+              </div>
+
+              {/* Chunk Overlap */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                  Chunk Overlap
+                </label>
+                <input
+                  type="number"
+                  value={settings.chunkOverlap}
+                  onChange={(e) => handleSettingsChange('chunkOverlap', parseInt(e.target.value) || 200)}
+                  min="0"
+                  max={Math.floor(settings.chunkSize * 0.8)}
+                  step="50"
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  Overlap between chunks (0-{Math.floor(settings.chunkSize * 0.8)} characters)
+                </p>
+              </div>
+
+              {/* Retrieval Count */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                  Retrieval Count
+                </label>
+                <input
+                  type="number"
+                  value={settings.retrievalCount}
+                  onChange={(e) => handleSettingsChange('retrievalCount', parseInt(e.target.value) || 3)}
+                  min="1"
+                  max="10"
+                  step="1"
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  Number of chunks to retrieve for context (1-10)
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-4 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
+              <h4 className="text-sm font-medium text-blue-900 dark:text-blue-100 mb-2">Current Settings Effect:</h4>
+              <div className="text-sm text-blue-700 dark:text-blue-300 space-y-1">
+                <p>• Documents will be split into chunks of {settings.chunkSize} characters with {settings.chunkOverlap} characters overlap</p>
+                <p>• When answering questions, {settings.retrievalCount} most relevant chunk{settings.retrievalCount > 1 ? 's' : ''} will be used as context</p>
+                <p>• Re-index your document after changing chunk settings to apply them</p>
+              </div>
+            </div>
           </div>
         </div>
       )}
@@ -447,6 +584,11 @@ export default function Home() {
                           {doc.chunks && (
                             <p className="text-xs text-gray-500 dark:text-gray-400">
                               {doc.chunks} chunks created
+                            </p>
+                          )}
+                          {doc.status === 'indexed' && (
+                            <p className="text-xs text-gray-500 dark:text-gray-400">
+                              Settings: {settings.chunkSize}/{settings.chunkOverlap} chars, {settings.retrievalCount} retrieved
                             </p>
                           )}
                         </div>
