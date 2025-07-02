@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useRef, useEffect } from 'react'
-import { Send, Bot, User, Key, Settings, Sparkles } from 'lucide-react'
+import { Send, Bot, User, Key, Settings, Sparkles, Upload, FileText, CheckCircle, AlertCircle, Loader } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
@@ -11,6 +11,14 @@ interface Message {
   timestamp: Date
 }
 
+interface DocumentInfo {
+  filename: string
+  path: string
+  size: number
+  status: 'uploaded' | 'indexed'
+  chunks?: number
+}
+
 export default function Home() {
   const [messages, setMessages] = useState<Message[]>([])
   const [inputMessage, setInputMessage] = useState('')
@@ -18,8 +26,17 @@ export default function Home() {
   const [apiKey, setApiKey] = useState('')
   const [showApiKeyInput, setShowApiKeyInput] = useState(false)
   const [developerMessage, setDeveloperMessage] = useState('You are a helpful AI assistant. Provide clear, concise, and accurate responses.')
+  
+  // PDF-related state
+  const [documents, setDocuments] = useState<DocumentInfo[]>([])
+  const [isUploading, setIsUploading] = useState(false)
+  const [isIndexing, setIsIndexing] = useState(false)
+  const [useRAG, setUseRAG] = useState(true)
+  const [vectorDBReady, setVectorDBReady] = useState(false)
+  
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -28,6 +45,22 @@ export default function Home() {
   useEffect(() => {
     scrollToBottom()
   }, [messages])
+
+  useEffect(() => {
+    // Check document status on component mount
+    fetchDocumentStatus()
+  }, [])
+
+  const fetchDocumentStatus = async () => {
+    try {
+      const response = await fetch('/api/document-status')
+      const data = await response.json()
+      setDocuments(data.documents || [])
+      setVectorDBReady(data.vector_db_ready || false)
+    } catch (error) {
+      console.error('Error fetching document status:', error)
+    }
+  }
 
   // Handle Ctrl+Enter for new lines, Enter for submission
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -45,6 +78,83 @@ export default function Home() {
     const textarea = e.target
     textarea.style.height = 'auto'
     textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`
+  }
+
+  // Handle PDF file upload
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    if (!file.name.endsWith('.pdf')) {
+      alert('Please select a PDF file')
+      return
+    }
+
+    setIsUploading(true)
+    
+    try {
+      const formData = new FormData()
+      formData.append('file', file)
+
+      const response = await fetch('/api/upload-pdf', {
+        method: 'POST',
+        body: formData,
+      })
+
+      if (!response.ok) {
+        throw new Error('Failed to upload PDF')
+      }
+
+      const result = await response.json()
+      await fetchDocumentStatus() // Refresh document status
+      
+      // Auto-index the uploaded document
+      handleIndexPDF()
+      
+    } catch (error) {
+      console.error('Error uploading PDF:', error)
+      alert('Error uploading PDF. Please try again.')
+    } finally {
+      setIsUploading(false)
+      if (fileInputRef.current) {
+        fileInputRef.current.value = ''
+      }
+    }
+  }
+
+  // Handle PDF indexing
+  const handleIndexPDF = async () => {
+    if (!apiKey.trim()) {
+      alert('Please enter your OpenAI API key first')
+      return
+    }
+
+    setIsIndexing(true)
+    
+    try {
+      const response = await fetch('/api/index-pdf', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          api_key: apiKey
+        }),
+      })
+
+      if (!response.ok) {
+        throw new Error('Failed to index PDF')
+      }
+
+      const result = await response.json()
+      await fetchDocumentStatus() // Refresh document status
+      
+    } catch (error) {
+      console.error('Error indexing PDF:', error)
+      alert('Error indexing PDF. Please check your API key and try again.')
+    } finally {
+      setIsIndexing(false)
+    }
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -69,17 +179,28 @@ export default function Home() {
     setMessages(prev => [...prev, newUserMessage])
 
     try {
-      const response = await fetch('/api/chat', {
+      // Choose endpoint based on whether we're using RAG
+      const endpoint = useRAG && vectorDBReady ? '/api/rag-chat' : '/api/chat'
+      const requestBody = useRAG && vectorDBReady 
+        ? {
+            user_message: userMessage,
+            model: 'gpt-4o-mini',
+            api_key: apiKey,
+            use_rag: true
+          }
+        : {
+            developer_message: developerMessage,
+            user_message: userMessage,
+            model: 'gpt-4o-mini',
+            api_key: apiKey
+          }
+
+      const response = await fetch(endpoint, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          developer_message: developerMessage,
-          user_message: userMessage,
-          model: 'gpt-4.1-mini',
-          api_key: apiKey
-        }),
+        body: JSON.stringify(requestBody),
       })
 
       if (!response.ok) {
@@ -129,6 +250,14 @@ export default function Home() {
 
   const formatTime = (date: Date) => {
     return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  }
+
+  const formatFileSize = (bytes: number) => {
+    if (bytes === 0) return '0 Bytes'
+    const k = 1024
+    const sizes = ['Bytes', 'KB', 'MB', 'GB']
+    const i = Math.floor(Math.log(bytes) / Math.log(k))
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
   }
 
   // Custom markdown components for better styling
@@ -204,17 +333,17 @@ export default function Home() {
     <div className="flex flex-col h-screen bg-gradient-to-br from-blue-50 to-indigo-100 dark:from-gray-900 dark:to-gray-800">
       {/* Header */}
       <header className="bg-white/80 dark:bg-gray-900/80 backdrop-blur-sm border-b border-gray-200 dark:border-gray-700">
-        <div className="max-w-4xl mx-auto px-4 py-4 flex items-center justify-between">
+        <div className="max-w-6xl mx-auto px-4 py-4 flex items-center justify-between">
           <div className="flex items-center space-x-3">
             <div className="p-2 bg-gradient-to-r from-blue-500 to-purple-600 rounded-lg">
               <Sparkles className="h-6 w-6 text-white" />
             </div>
             <div>
               <h1 className="text-xl font-bold text-gray-900 dark:text-white">
-                AI Engineer Challenge
+                PDF RAG Chat
               </h1>
               <p className="text-sm text-gray-600 dark:text-gray-400">
-                Powered by OpenAI GPT-4.1-mini
+                Upload a PDF and chat with it using AI
               </p>
             </div>
           </div>
@@ -241,7 +370,7 @@ export default function Home() {
       {/* API Key Input */}
       {showApiKeyInput && (
         <div className="bg-white/80 dark:bg-gray-900/80 backdrop-blur-sm border-b border-gray-200 dark:border-gray-700 p-4">
-          <div className="max-w-4xl mx-auto">
+          <div className="max-w-6xl mx-auto">
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
               OpenAI API Key
             </label>
@@ -259,135 +388,280 @@ export default function Home() {
         </div>
       )}
 
-      {/* Messages */}
-      <div className="flex-1 overflow-y-auto p-4">
-        <div className="max-w-4xl mx-auto space-y-4">
-          {messages.length === 0 && (
-            <div className="text-center py-12">
-              <div className="p-4 bg-gradient-to-r from-blue-500 to-purple-600 rounded-full w-16 h-16 mx-auto mb-4 flex items-center justify-center">
-                <Sparkles className="h-8 w-8 text-white" />
-              </div>
-              <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
-                Welcome to AI Engineer Challenge
-              </h3>
-              <p className="text-gray-600 dark:text-gray-400 max-w-md mx-auto">
-                Start a conversation with the AI assistant. Make sure to enter your OpenAI API key in the settings above.
-              </p>
-            </div>
-          )}
+      <div className="flex flex-1 overflow-hidden">
+        {/* PDF Upload Panel */}
+        <div className="w-80 bg-white/60 dark:bg-gray-900/60 backdrop-blur-sm border-r border-gray-200 dark:border-gray-700 p-4 overflow-y-auto">
+          <div className="space-y-4">
+            <h2 className="text-lg font-semibold text-gray-900 dark:text-white flex items-center space-x-2">
+              <FileText className="h-5 w-5" />
+              <span>Document Management</span>
+            </h2>
 
-          {messages.map((message, index) => (
-            <div
-              key={index}
-              className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
-            >
-              <div
-                className={`flex items-start space-x-3 max-w-[80%] ${
-                  message.role === 'user' ? 'flex-row-reverse space-x-reverse' : ''
-                }`}
-              >
-                <div
-                  className={`flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center ${
-                    message.role === 'user'
-                      ? 'bg-blue-500 text-white'
-                      : 'bg-gray-500 text-white'
-                  }`}
+            {/* Upload Section */}
+            <div className="space-y-3">
+              <div className="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg p-6 text-center">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".pdf"
+                  onChange={handleFileUpload}
+                  className="hidden"
+                />
+                <Upload className="h-8 w-8 text-gray-400 mx-auto mb-2" />
+                <p className="text-sm text-gray-600 dark:text-gray-400 mb-3">
+                  Upload a PDF to start chatting with it
+                </p>
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={isUploading}
+                  className="px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2 mx-auto"
                 >
-                  {message.role === 'user' ? (
-                    <User className="h-4 w-4" />
+                  {isUploading ? (
+                    <>
+                      <Loader className="h-4 w-4 animate-spin" />
+                      <span>Uploading...</span>
+                    </>
                   ) : (
-                    <Bot className="h-4 w-4" />
+                    <>
+                      <Upload className="h-4 w-4" />
+                      <span>Choose PDF</span>
+                    </>
+                  )}
+                </button>
+              </div>
+
+              {/* Document Status */}
+              {documents.length > 0 && (
+                <div className="space-y-2">
+                  <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300">Current Document</h3>
+                  {documents.map((doc, index) => (
+                    <div key={index} className="bg-white dark:bg-gray-800 rounded-lg p-3 border border-gray-200 dark:border-gray-700">
+                      <div className="flex items-start justify-between">
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium text-gray-900 dark:text-white truncate">
+                            {doc.filename}
+                          </p>
+                          <p className="text-xs text-gray-500 dark:text-gray-400">
+                            {formatFileSize(doc.size)}
+                          </p>
+                          {doc.chunks && (
+                            <p className="text-xs text-gray-500 dark:text-gray-400">
+                              {doc.chunks} chunks created
+                            </p>
+                          )}
+                        </div>
+                        <div className="ml-2 flex-shrink-0">
+                          {doc.status === 'indexed' ? (
+                            <CheckCircle className="h-5 w-5 text-green-500" />
+                          ) : (
+                            <AlertCircle className="h-5 w-5 text-yellow-500" />
+                          )}
+                        </div>
+                      </div>
+                      <div className="mt-2">
+                        <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
+                          doc.status === 'indexed' 
+                            ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200'
+                            : 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200'
+                        }`}>
+                          {doc.status === 'indexed' ? 'Ready for chat' : 'Processing...'}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                  
+                  {documents.some(doc => doc.status === 'uploaded') && (
+                    <button
+                      onClick={handleIndexPDF}
+                      disabled={isIndexing || !apiKey.trim()}
+                      className="w-full px-4 py-2 bg-green-500 text-white rounded-md hover:bg-green-600 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-2"
+                    >
+                      {isIndexing ? (
+                        <>
+                          <Loader className="h-4 w-4 animate-spin" />
+                          <span>Indexing...</span>
+                        </>
+                      ) : (
+                        <>
+                          <CheckCircle className="h-4 w-4" />
+                          <span>Index Document</span>
+                        </>
+                      )}
+                    </button>
                   )}
                 </div>
+              )}
+
+              {/* RAG Toggle */}
+              {vectorDBReady && (
+                <div className="space-y-2">
+                  <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300">Chat Mode</h3>
+                  <div className="flex items-center space-x-3">
+                    <input
+                      type="checkbox"
+                      id="useRAG"
+                      checked={useRAG}
+                      onChange={(e) => setUseRAG(e.target.checked)}
+                      className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                    />
+                    <label htmlFor="useRAG" className="text-sm text-gray-700 dark:text-gray-300">
+                      Use document context (RAG)
+                    </label>
+                  </div>
+                  <p className="text-xs text-gray-500 dark:text-gray-400">
+                    When enabled, answers will be based on your uploaded document
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Chat Area */}
+        <div className="flex-1 flex flex-col">
+          {/* Messages */}
+          <div className="flex-1 overflow-y-auto p-4">
+            <div className="max-w-4xl mx-auto space-y-4">
+              {messages.length === 0 && (
+                <div className="text-center py-12">
+                  <div className="p-4 bg-gradient-to-r from-blue-500 to-purple-600 rounded-full w-16 h-16 mx-auto mb-4 flex items-center justify-center">
+                    <Sparkles className="h-8 w-8 text-white" />
+                  </div>
+                  <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
+                    Welcome to PDF RAG Chat
+                  </h3>
+                  <p className="text-gray-600 dark:text-gray-400 max-w-md mx-auto">
+                    {vectorDBReady 
+                      ? "Your document is ready! Start asking questions about it."
+                      : "Upload a PDF document to start chatting with it, or chat normally with the AI assistant."
+                    }
+                  </p>
+                </div>
+              )}
+
+              {messages.map((message, index) => (
                 <div
-                  className={`px-4 py-3 rounded-lg ${
-                    message.role === 'user'
-                      ? 'bg-blue-500 text-white'
-                      : 'bg-white dark:bg-gray-800 text-gray-900 dark:text-white border border-gray-200 dark:border-gray-700'
-                  }`}
+                  key={index}
+                  className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
                 >
-                  {message.role === 'user' ? (
-                    <div className="whitespace-pre-wrap">{message.content}</div>
-                  ) : (
-                    <div className="prose prose-sm dark:prose-invert max-w-none">
-                      <ReactMarkdown 
-                        remarkPlugins={[remarkGfm]}
-                        components={markdownComponents}
-                      >
-                        {message.content}
-                      </ReactMarkdown>
-                    </div>
-                  )}
                   <div
-                    className={`text-xs mt-2 ${
-                      message.role === 'user'
-                        ? 'text-blue-100'
-                        : 'text-gray-500 dark:text-gray-400'
+                    className={`flex items-start space-x-3 max-w-[80%] ${
+                      message.role === 'user' ? 'flex-row-reverse space-x-reverse' : ''
                     }`}
                   >
-                    {formatTime(message.timestamp)}
+                    <div
+                      className={`flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center ${
+                        message.role === 'user'
+                          ? 'bg-blue-500 text-white'
+                          : 'bg-gray-500 text-white'
+                      }`}
+                    >
+                      {message.role === 'user' ? (
+                        <User className="h-4 w-4" />
+                      ) : (
+                        <Bot className="h-4 w-4" />
+                      )}
+                    </div>
+                    <div
+                      className={`px-4 py-3 rounded-lg ${
+                        message.role === 'user'
+                          ? 'bg-blue-500 text-white'
+                          : 'bg-white dark:bg-gray-800 text-gray-900 dark:text-white border border-gray-200 dark:border-gray-700'
+                      }`}
+                    >
+                      {message.role === 'user' ? (
+                        <div className="whitespace-pre-wrap">{message.content}</div>
+                      ) : (
+                        <div className="prose prose-sm dark:prose-invert max-w-none">
+                          <ReactMarkdown 
+                            remarkPlugins={[remarkGfm]}
+                            components={markdownComponents}
+                          >
+                            {message.content}
+                          </ReactMarkdown>
+                        </div>
+                      )}
+                      <div
+                        className={`text-xs mt-2 ${
+                          message.role === 'user'
+                            ? 'text-blue-100'
+                            : 'text-gray-500 dark:text-gray-400'
+                        }`}
+                      >
+                        {formatTime(message.timestamp)}
+                      </div>
+                    </div>
                   </div>
                 </div>
-              </div>
-            </div>
-          ))}
+              ))}
 
-          {isLoading && (
-            <div className="flex justify-start">
-              <div className="flex items-start space-x-3">
-                <div className="flex-shrink-0 w-8 h-8 rounded-full bg-gray-500 text-white flex items-center justify-center">
-                  <Bot className="h-4 w-4" />
-                </div>
-                <div className="px-4 py-3 rounded-lg bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700">
-                  <div className="flex space-x-1">
-                    <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div>
-                    <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }}></div>
-                    <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
+              {isLoading && (
+                <div className="flex justify-start">
+                  <div className="flex items-start space-x-3">
+                    <div className="flex-shrink-0 w-8 h-8 rounded-full bg-gray-500 text-white flex items-center justify-center">
+                      <Bot className="h-4 w-4" />
+                    </div>
+                    <div className="px-4 py-3 rounded-lg bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700">
+                      <div className="flex space-x-1">
+                        <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div>
+                        <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }}></div>
+                        <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
+                      </div>
+                    </div>
                   </div>
                 </div>
-              </div>
+              )}
+              
+              <div ref={messagesEndRef} />
             </div>
-          )}
-          
-          <div ref={messagesEndRef} />
-        </div>
-      </div>
+          </div>
 
-      {/* Input Form */}
-      <div className="bg-white/80 dark:bg-gray-900/80 backdrop-blur-sm border-t border-gray-200 dark:border-gray-700 p-4">
-        <div className="max-w-4xl mx-auto">
-          <form onSubmit={handleSubmit} className="flex space-x-4">
-            <div className="flex-1 relative">
-              <textarea
-                ref={textareaRef}
-                value={inputMessage}
-                onChange={handleTextareaChange}
-                onKeyDown={handleKeyDown}
-                placeholder="Type your message... (Ctrl+Enter for new line, Enter to send)"
-                disabled={isLoading || !apiKey.trim()}
-                rows={1}
-                className="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed resize-none overflow-hidden"
-                style={{ minHeight: '48px', maxHeight: '200px' }}
-              />
-              <div className="absolute bottom-2 right-2 text-xs text-gray-400">
-                Ctrl+Enter
-              </div>
+          {/* Input Form */}
+          <div className="bg-white/80 dark:bg-gray-900/80 backdrop-blur-sm border-t border-gray-200 dark:border-gray-700 p-4">
+            <div className="max-w-4xl mx-auto">
+              <form onSubmit={handleSubmit} className="flex space-x-4">
+                <div className="flex-1 relative">
+                  <textarea
+                    ref={textareaRef}
+                    value={inputMessage}
+                    onChange={handleTextareaChange}
+                    onKeyDown={handleKeyDown}
+                    placeholder={vectorDBReady && useRAG 
+                      ? "Ask a question about your document... (Ctrl+Enter for new line, Enter to send)"
+                      : "Type your message... (Ctrl+Enter for new line, Enter to send)"
+                    }
+                    disabled={isLoading || !apiKey.trim()}
+                    rows={1}
+                    className="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed resize-none overflow-hidden"
+                    style={{ minHeight: '48px', maxHeight: '200px' }}
+                  />
+                  <div className="absolute bottom-2 right-2 text-xs text-gray-400">
+                    Ctrl+Enter
+                  </div>
+                </div>
+                <button
+                  type="submit"
+                  disabled={isLoading || !inputMessage.trim() || !apiKey.trim()}
+                  className="px-6 py-3 bg-gradient-to-r from-blue-500 to-purple-600 text-white rounded-lg hover:from-blue-600 hover:to-purple-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 flex items-center space-x-2"
+                >
+                  <Send className="h-4 w-4" />
+                  <span>Send</span>
+                </button>
+              </form>
+              
+              {!apiKey.trim() && (
+                <p className="mt-2 text-sm text-red-600 dark:text-red-400">
+                  Please enter your OpenAI API key to start chatting.
+                </p>
+              )}
+              
+              {vectorDBReady && useRAG && (
+                <p className="mt-2 text-sm text-green-600 dark:text-green-400">
+                  RAG mode: Answers will be based on your uploaded document.
+                </p>
+              )}
             </div>
-            <button
-              type="submit"
-              disabled={isLoading || !inputMessage.trim() || !apiKey.trim()}
-              className="px-6 py-3 bg-gradient-to-r from-blue-500 to-purple-600 text-white rounded-lg hover:from-blue-600 hover:to-purple-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 flex items-center space-x-2"
-            >
-              <Send className="h-4 w-4" />
-              <span>Send</span>
-            </button>
-          </form>
-          
-          {!apiKey.trim() && (
-            <p className="mt-2 text-sm text-red-600 dark:text-red-400">
-              Please enter your OpenAI API key to start chatting.
-            </p>
-          )}
+          </div>
         </div>
       </div>
     </div>
